@@ -108,6 +108,7 @@ class MedusaHC:
                     "e_cur_high", current * float(cfg.get("e_cur_high_mult", 1.7))
                 )
             self._restore_saved_offsets()
+            self._restore_tracked_tool()
             self._close()
             self.gcode.respond_info("MedusaHC controller initialized")
         except Exception:
@@ -129,6 +130,54 @@ class MedusaHC:
                     "SET_GCODE_VARIABLE MACRO=%s VARIABLE=t%d_off_%s VALUE=%s"
                     % (offset_macro, tool, axis, float(values[saved_name]))
                 )
+
+    # ---------------------------------------------------------------------
+    # Single toolhead sensor: software tracks WHICH hotend is mounted
+    # ---------------------------------------------------------------------
+
+    def _attached(self):
+        """Raw toolhead sensor: True while any hotend is on the head."""
+        source = self._sensor_source()
+        return bool(source is not None and source.hotend_attached())
+
+    def _single_sensor(self):
+        source = self._sensor_source()
+        return bool(source is not None and source.single_sensor)
+
+    def _store_tool(self, tool):
+        """Persist the mounted tool so a restart keeps it (-1 = none)."""
+        source = self._sensor_source()
+        if source is None or not source.single_sensor:
+            return
+        if tool >= 0:
+            source.set_tool(tool)
+        else:
+            source.clear_tool()
+        self._run("SAVE_VARIABLE VARIABLE=mhc_mounted_tool VALUE=%d" % tool)
+
+    def _restore_tracked_tool(self):
+        if not self._single_sensor() or not self._attached():
+            return
+        saved = self.printer.lookup_object("save_variables", None)
+        values = getattr(saved, "allVariables", {}) if saved is not None else {}
+        tool = int(values.get("mhc_mounted_tool", -1))
+        if 0 <= tool < self._tool_count():
+            self._sensor_source().set_tool(tool)
+        else:
+            self.gcode.respond_info(
+                "MedusaHC: hotend attached but tool unknown; run "
+                "MHC_ASSIGN_TOOL T=<n>")
+
+    def _wait_for_attached(self, expected):
+        """Wait for the toolhead sensor to reach the expected presence."""
+        deadline = self.reactor.monotonic() + self.sensor_timeout
+        while True:
+            if self._attached() == expected:
+                return True
+            if self.reactor.monotonic() >= deadline:
+                return False
+            self.reactor.pause(min(deadline, self.reactor.monotonic()
+                                   + self.sensor_poll_interval))
 
     def get_status(self, eventtime):
         """Return a compact status dictionary for Klipper API consumers."""
@@ -415,7 +464,11 @@ SET_VELOCITY_LIMIT ACCEL={old}""".format(
             slow=v["slow_feed"], old=old_accel
         ))
         self._wait_moves()
-        if not self._wait_for_tool(-1):
+        if self._single_sensor():
+            if not self._wait_for_attached(False):
+                self._fail("MHC_DROP: toolhead sensor still sees a hotend")
+            self._store_tool(-1)
+        elif not self._wait_for_tool(-1):
             self._fail("MHC_DROP: dock sensors did not confirm an empty toolhead")
         self.gcode.respond_info("MHC_DROP OK: T%d parked" % tool)
 
@@ -449,7 +502,11 @@ M106 S255""".format(
             xshift_more=v["x"] - (v["x_shift"] + 2)*d
         ))
         self._wait_moves()
-        if not self._wait_for_tool(tool):
+        if self._single_sensor():
+            if not self._wait_for_attached(True):
+                self._fail("MHC_SET: toolhead sensor does not see T%d" % tool)
+            self._store_tool(tool)
+        elif not self._wait_for_tool(tool):
             self._fail("MHC_SET: sensors did not confirm T%d" % tool)
         self._close()
         self._after_pick(tool, v)
@@ -569,7 +626,10 @@ G1 Y{safe} F{feed}""".format(
                 self._run("G91\nG1 %s F14000\nG90" % (("Y%s Z3" % (-2*direction)) if self._is_printing() else "Z1"))
             current = self._current_tool()
             if current == -2:
-                self._fail("MHC_SET: ambiguous sensor state")
+                self._fail("MHC_SET: hotend attached but tool unknown; "
+                           "run MHC_ASSIGN_TOOL T=<n> (or remove it)"
+                           if self._single_sensor() else
+                           "MHC_SET: ambiguous sensor state")
             if current == tool:
                 if self._resume_preparing:
                     v = self._motion_values(tool)
@@ -761,6 +821,16 @@ SET_VELOCITY_LIMIT ACCEL={old}""".format(
         self._apply_offset(tool, gcmd.get_int("MOVE", 1, minval=0, maxval=1))
 
     def cmd_MHC_ASSIGN_TOOL(self, gcmd):
+        """Sync toolchanger; with T= declare which hotend is mounted."""
+        declared = gcmd.get_int("T", None)
+        if declared is not None:
+            self._validate_tool(gcmd, declared)
+            if not self._single_sensor():
+                raise gcmd.error("MHC_ASSIGN_TOOL T= needs single-sensor mode")
+            if not self._attached():
+                raise gcmd.error("MHC_ASSIGN_TOOL: toolhead sensor sees no hotend")
+            self._store_tool(declared)
+            self._apply_offset(declared, move=0)
         tool = self._current_tool()
         if tool >= 0:
             self._run("INITIALIZE_TOOLCHANGER T=%d" % tool)

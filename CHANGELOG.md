@@ -4,6 +4,8 @@ This file summarizes the major public changes between MedusaHC releases. The pro
 
 ## Unreleased
 
+- Fork: single toolhead sensor (`pin_e`) only. Per-dock `pin_tN` switches removed; `pin_watch` tracks the mounted tool in software (`mhc_mounted_tool`), validated by `pin_e`. Added `MHC_ASSIGN_TOOL T=<n>` for manual recovery.
+- Fork: Klicky (Zero) probe example (`klicky_config.cfg`) with `CALIBRATE_TOOL_Z`.
 - Made the tested Python tool-change controller the default implementation on
   `main` and preserved the final macro implementation in the frozen
   `legacy-macros` branch.

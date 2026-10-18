@@ -47,6 +47,13 @@ class PinWatch:
         # Use 0.0 for immediate.
         self.assign_delay = float(config.get("assign_delay", 0.0))
 
+        # Single-sensor mode (this fork): only pin_e exists, on the toolhead.
+        # It reports "a hotend is attached". WHICH hotend is tracked in
+        # software (set_tool/clear_tool, called by medusahc.py) and validated
+        # against pin_e. tool_count is then required to size the UI lamps.
+        self.tool_count_cfg = config.getint("tool_count", 0, minval=0)
+        self.tracked_tool = -1
+
         # Internal pin states (0/1). Labels: e, t0, t1, ...
         self.state = {}
         self.pin_by_label = {}
@@ -98,6 +105,26 @@ class PinWatch:
     def get_status(self, eventtime):
         return {"current_tool": int(self.current_tool)}
 
+    @property
+    def single_sensor(self):
+        """True when no per-dock pin_tN switches are configured."""
+        return not self.t_indices
+
+    def hotend_attached(self):
+        """Raw toolhead sensor: True when any hotend is on the head."""
+        return int(self.state.get("e", 0)) == 1
+
+    def set_tool(self, tool):
+        """Record which hotend is mounted (single-sensor mode)."""
+        self.tracked_tool = int(tool)
+        self.current_tool = int(tool)  # visible immediately to the controller
+        self._schedule_compute("set_tool", 0.0)
+
+    def clear_tool(self):
+        self.tracked_tool = -1
+        self.current_tool = -1
+        self._schedule_compute("clear_tool", 0.0)
+
     def _parse_t_index(self, label):
         if not label.startswith("t"):
             return None
@@ -108,7 +135,7 @@ class PinWatch:
 
     def _tool_count(self):
         if not self.t_indices:
-            return 0
+            return self.tool_count_cfg
         return max(self.t_indices) + 1
 
     def _make_callback(self, label):
@@ -136,7 +163,26 @@ class PinWatch:
         return _cb
 
     # --- compute algo (same as your macro) ---
+    def _compute_single(self):
+        """pin_e only: -1 empty head, tracked tool when attached, else -2."""
+        ex = int(self.state.get("e", 0))
+        if ex not in (0, 1):
+            ct = -2
+        elif ex == 0:
+            # Nothing on the head: any remembered tool is stale.
+            self.tracked_tool = -1
+            ct = -1
+        elif self.tracked_tool >= 0:
+            ct = self.tracked_tool
+        else:
+            # Hotend present but unknown (e.g. swapped by hand): needs
+            # MHC_ASSIGN_TOOL T=<n> or the next successful MHC_SET.
+            ct = -2
+        return ct, (self._tool_count(), ex, self.tracked_tool, 0, 0)
+
     def _compute_current_tool(self):
+        if self.single_sensor:
+            return self._compute_single()
         N = self._tool_count()
         if N < 1:
             return -2, (N, None, None, None, 1)
@@ -379,7 +425,9 @@ class PinWatch:
         # Used after current_tool changes.
         N = self._tool_count()
         for i in range(N):
-            s = int(self.state.get("t%d" % i, 0))
+            # Single-sensor mode has no dock switches: treat non-active tools
+            # as parked (green); the active one turns blue in _update_lamp.
+            s = 1 if self.single_sensor else int(self.state.get("t%d" % i, 0))
             self._update_lamp(i, s)
 
     def _info(self, msg):

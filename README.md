@@ -210,13 +210,12 @@ For each hotend, the board must have the following ports:
 - heater port (MOSFET-controlled; can be used either hotend heaters or the bed)
 - thermistor port
 - fan port (either PWM-controlled or a constant 24V port)
-- endstop port for the endstop located on the base of that hotend
 
 ### Ports required for the toolhead
 
 - one extruder motor port
 - part cooling fan port(s)
-- toolhead endstop port
+- toolhead endstop port (the only hotend sensor; no per-hotend endstops)
 - port for the auto-calibration sensor (I use **BTT Eddy** connected via CAN)
 - servo port — if the board does not have a dedicated servo port capable of supplying stable 5V under load, it is recommended to power the servo via a **24V→5V DC-DC converter** from the main power supply
 
@@ -373,8 +372,9 @@ This block configures the `pin_watch` script.
 - `sync_mainsail_sensors: 1` — turns each tool's button into a state indicator lamp via `variable_color`. The active tool is shown in blue, parked tools (endstop pressed) in green, missing tools (endstop released) in red. The lamp is updated immediately from pin edges, so anomalies are visible in real time.
 - `color_active`, `color_pressed`, `color_released` — hex colors (without `#`) used by the indicator lamp. Defaults: blue / green / red.
 - `verbose` — enables additional console output with detailed pin state information.
-- `pin_e` — microswitch pin located on the toolhead.
-- `pin_t0`, `pin_t1`, etc. — microswitch pins on the bases of the corresponding hotends.
+- `pin_e` — the **only** sensor in this fork: microswitch on the toolhead (pressed = a hotend is attached).
+- `tool_count` — number of tools (needed because there are no per-dock `pin_tN` switches).
+- `pin_t0`, `pin_t1`, etc. — **not used in this fork**. The mounted tool is tracked in software and saved as `mhc_mounted_tool`. If a hotend is attached but unknown (manual swap), run `MHC_ASSIGN_TOOL T=<n>`.
 
 Each sync feature is independent. Enable only the integrations you actually
 use.

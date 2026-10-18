@@ -29,7 +29,7 @@ Then enter the actual X/Y coordinates for the installed docks. Pickup, drop, cle
 
 ## Probe selection
 
-The example enables native Klipper Eddy support through `eddy_config.cfg`.
+The example enables a Klicky (Zero) probe through `klicky_config.cfg`, which also provides `CALIBRATE_TOOL_Z` (per-hotend Z offsets vs T0, saved via `SAVE_VARIABLE`). `eddy_config.cfg` is kept as the upstream alternative; include only one. XY offsets remain manual.
 
 `bltouch.cfg` is an alternative backup configuration. Do not enable Eddy and BLTouch probe sections at the same time without resolving duplicate sections and pins. A BLTouch setup also requires manual review of `START_PRINT`, including the Eddy-specific `TAP_BASE_TOOL` call.
 
