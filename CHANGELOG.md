@@ -4,6 +4,7 @@ This file summarizes the major public changes between MedusaHC releases. The pro
 
 ## Unreleased
 
+- Fork: extruder lever is actuated only by the servo. `MHC_OPEN` retracts the filament by `e_open`, then unlocks with the servo; `MHC_CLOSE` locks with the servo, then undoes the retraction. Removed the extruder-motor latch wiggle and current boost; `e_close` replaced by `e_feed`/`servo_delay`.
 - Fork: single toolhead sensor (`pin_e`) only. Per-dock `pin_tN` switches removed; `pin_watch` tracks the mounted tool in software (`mhc_mounted_tool`), validated by `pin_e`. Added `MHC_ASSIGN_TOOL T=<n>` for manual recovery.
 - Fork: Klicky (Zero) probe example (`klicky_config.cfg`) with `CALIBRATE_TOOL_Z`.
 - Made the tested Python tool-change controller the default implementation on

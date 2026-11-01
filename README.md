@@ -435,7 +435,7 @@ This macro contains the main coordinates and distances used in the system, as we
 - `variable_y_latch` — the **Y coordinate** where the toolhead fully engages with the hotend.
   This must be set very precisely so that the toolhead presses firmly against the hotend, but without causing the motors to skip steps.
 
-- `variable_x_shift` — the distance the hotend needs to move along the X axis from `variable_x_t` in order to remove it from the base keyhole.
+- `variable_x_shift` — the distance the hotend needs to move along the X axis from `variable_x_t` in order to remove it from the base keyhole. Only its magnitude is used: dropping always ends with a slow left-to-right X move into the dock for front docks, and picking runs the opposite way (right-to-left). Rear docks mirror both.
 
 - `variable_fast_accel`
 - `variable_fast_speed` — speeds and accelerations for tool changes. During the change process, there are slowdowns that are calculated as proportions of these parameters.
@@ -446,11 +446,11 @@ This macro contains the main coordinates and distances used in the system, as we
 
 The user only needs to select `variable_tools_direction` and enter the correct coordinates. The MedusaHC macros derive the movement direction from that setting. Parking coordinates outside the MedusaHC tool-change macros are printer-specific and must still be checked separately.
 
-- `variable_e_open`
-- `variable_e_close` — the distance and direction (in mm of filament) the extruder motor rotates to open and close the feeder latch.
-  Sign sets direction: by default open is negative, close is positive. Flip the sign if your extruder is wired or mounted the other way around.
+- `variable_e_open` — filament retraction (mm, negative = retract) done before the servo unlocks the extruder lever on `MHC_OPEN`. `MHC_CLOSE` locks the servo first, then undoes the same retraction.
+- `variable_e_feed` — feedrate (mm/min) of that retraction.
+- `variable_servo_delay` — time (ms) given to the servo to reach its angle before the next move.
 
-- `variable_e_cur_high_mult` — multiplier applied to the extruder's base TMC `run_current` to get the boosted current used during feeder **OPEN**.
+- `variable_e_cur_high_mult` — currently unused by `MHC_OPEN`/`MHC_CLOSE` (the servo actuates the latch); kept for compatibility.
   The boost is needed so the motor has enough torque to break the mechanical lock without skipping steps. Typical range: **1.3 – 1.8**.
   Base and boosted currents are cached at initialization. Save changes to the
   multiplier or `run_current` in the configuration and restart Klipper while idle.

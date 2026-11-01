@@ -165,8 +165,8 @@ class MedusaHC:
             self._sensor_source().set_tool(tool)
         else:
             self.gcode.respond_info(
-                "MedusaHC: hotend attached but tool unknown; run "
-                "MHC_ASSIGN_TOOL T=<n>")
+                "MedusaHC: hotend attached but tool unknown; run MHC_ASSIGN_TOOL T=<n>"
+            )
 
     def _wait_for_attached(self, expected):
         """Wait for the toolhead sensor to reach the expected presence."""
@@ -176,8 +176,9 @@ class MedusaHC:
                 return True
             if self.reactor.monotonic() >= deadline:
                 return False
-            self.reactor.pause(min(deadline, self.reactor.monotonic()
-                                   + self.sensor_poll_interval))
+            self.reactor.pause(
+                min(deadline, self.reactor.monotonic() + self.sensor_poll_interval)
+            )
 
     def get_status(self, eventtime):
         """Return a compact status dictionary for Klipper API consumers."""
@@ -209,11 +210,13 @@ class MedusaHC:
         """Prefer the future hidden macro name while accepting legacy config."""
         candidates = (name,) if name.startswith("_") else ("_" + name, name)
         for candidate in candidates:
-            if self.printer.lookup_object("gcode_macro %s" % candidate, None) is not None:
+            if (
+                self.printer.lookup_object("gcode_macro %s" % candidate, None)
+                is not None
+            ):
                 return candidate
         raise self.printer.command_error(
-            "MedusaHC requires [gcode_macro %s] or [gcode_macro _%s]"
-            % (name, name)
+            "MedusaHC requires [gcode_macro %s] or [gcode_macro _%s]" % (name, name)
         )
 
     def _macro(self, name):
@@ -249,7 +252,9 @@ class MedusaHC:
     def _validate_tool(self, gcmd, tool):
         count = self._tool_count()
         if tool < 0 or tool >= count:
-            raise gcmd.error("Tool T%d is outside configured range T0..T%d" % (tool, count - 1))
+            raise gcmd.error(
+                "Tool T%d is outside configured range T0..T%d" % (tool, count - 1)
+            )
 
     def _run(self, script):
         self.gcode.run_script_from_command(script)
@@ -282,14 +287,12 @@ class MedusaHC:
             return
         self._run("SAVE_GCODE_STATE NAME=MHC_CHANGE_STATE")
         self._change_state = copy.deepcopy(
-            self.printer.lookup_object("gcode_move").saved_states[
-                "MHC_CHANGE_STATE"])
+            self.printer.lookup_object("gcode_move").saved_states["MHC_CHANGE_STATE"]
+        )
 
     def _begin(self, operation, target=-1):
         if self.operation != "idle":
-            raise self.printer.command_error(
-                "MedusaHC is busy: %s" % self.operation
-            )
+            raise self.printer.command_error("MedusaHC is busy: %s" % self.operation)
         self.operation = operation
         self.target_tool = target
         self.last_error = ""
@@ -312,8 +315,9 @@ class MedusaHC:
                 # BASE_PAUSE captures a position during the failed change.
                 # Preserve the prechange G-code/E/layer context; recovery
                 # later replaces its XYZ with the safe exit position.
-                self.printer.lookup_object("gcode_move").saved_states[
-                    "PAUSE_STATE"] = copy.deepcopy(self._change_state)
+                self.printer.lookup_object("gcode_move").saved_states["PAUSE_STATE"] = (
+                    copy.deepcopy(self._change_state)
+                )
             self._finish()
         if print_was_active:
             raise _OperationPaused(message)
@@ -363,45 +367,46 @@ class MedusaHC:
         self._run(self._macro_name("HOME_REQUEST"))
 
     def _open(self):
-        """Release the feeder latch using its servo and extruder movement."""
+        """Retract the filament, then release the feeder latch with the servo."""
         if self.feeder_open:
             return
-        state = self._global()
         cfg = self._tool_cfg()
-        high = float(state.get("e_cur_high", 0.0))
-        base = float(state.get("e_cur", 0.0))
-        accel = float(cfg["fast_accel"])
-        old_accel = self._old_accel()
         e_open = float(cfg.get("e_open", -5.0))
         servo_angle = float(cfg.get("servo_open_angle", 90.0))
-        self._run("""SET_STEPPER_ENABLE STEPPER=extruder ENABLE=1
-SET_VELOCITY_LIMIT ACCEL={accel}
-SET_SERVO SERVO=my_servo ANGLE={servo_angle}
+        delay = int(float(cfg.get("servo_delay", 400)))
+        self._run(
+            """SET_STEPPER_ENABLE STEPPER=extruder ENABLE=1
 G91
-SET_TMC_CURRENT STEPPER=extruder CURRENT={high}
-G1 E-0.3 F1000
-G1 E0.3 F1000
-G1 E-0.3 F1000
-G1 E0.3 F1000
-G1 E{e_open} F2500
+G1 E{e_open} F{feed}
 G90
-SET_VELOCITY_LIMIT ACCEL={old}
-SET_TMC_CURRENT STEPPER=extruder CURRENT={base}""".format(
-            high=high, accel=accel, servo_angle=servo_angle,
-            e_open=e_open, old=old_accel, base=base
-        ))
+SET_SERVO SERVO=my_servo ANGLE={servo_angle}
+G4 P{delay}""".format(
+                e_open=e_open,
+                feed=float(cfg.get("e_feed", 1500)),
+                servo_angle=servo_angle,
+                delay=delay,
+            )
+        )
         self.feeder_open = True
         self._set_compat("feeder_open", 1)
 
     def _close(self):
-        """Engage the feeder latch and restore its logical state."""
+        """Lock the feeder latch with the servo, then undo the filament retraction."""
         cfg = self._tool_cfg()
-        e_close = float(cfg.get("e_close", 3.0))
         servo_angle = float(cfg.get("servo_close_angle", 180.0))
-        self._run("""SET_SERVO SERVO=my_servo ANGLE={servo_angle}
+        delay = int(float(cfg.get("servo_delay", 400)))
+        script = """SET_SERVO SERVO=my_servo ANGLE={servo_angle}
+G4 P{delay}""".format(servo_angle=servo_angle, delay=delay)
+        if self.feeder_open:
+            script += """
+SET_STEPPER_ENABLE STEPPER=extruder ENABLE=1
 G91
-G1 E{e_close} F6000
-G90""".format(servo_angle=servo_angle, e_close=e_close))
+G1 E{e_undo} F{feed}
+G90""".format(
+                e_undo=-float(cfg.get("e_open", -5.0)),
+                feed=float(cfg.get("e_feed", 1500)),
+            )
+        self._run(script)
         self.feeder_open = False
         self._set_compat("feeder_open", 0)
 
@@ -440,29 +445,33 @@ G90""".format(servo_angle=servo_angle, e_close=e_close))
         # print. The active offset is applied again only after reaching safety.
         self._apply_offset(0, move=0)
         self._run("SET_GCODE_OFFSET X=0 Y=0 MOVE=0")
-        self._run("""SET_VELOCITY_LIMIT ACCEL={accel}
+        self._run(
+            """SET_VELOCITY_LIMIT ACCEL={accel}
 G90
 G1 Y{safe} X{xapproach} F{feed}""".format(
-            accel=v["accel"], safe=v["y_safe"], xapproach=v["x"] + 10*d,
-            feed=v["feed"]
-        ))
+                accel=v["accel"],
+                safe=v["y_safe"],
+                xapproach=v["x"],
+                feed=v["feed"],
+            )
+        )
         if not self.feeder_open:
             self._open()
-        self._run("""M106 S255
-G1 Y{brushapproach} F{feed}
-G1 X{xprime} F{feed}
+        self._run(
+            """M106 S255
 G1 Y{latchapproach} F{feed}
 G1 X{xshift} F{feed}
-G1 Y{latch} F{feed}
-G1 X{x} F{slow}
 G1 Y{safe} F{feed}
 SET_VELOCITY_LIMIT ACCEL={old}""".format(
-            safe=v["y_safe"], brushapproach=v["y_brush"] + 3*d,
-            xprime=v["x"] - v["x_prime_shift"]*d,
-            feed=v["feed"], latchapproach=v["y_latch"] + 8*d,
-            xshift=v["x"] - v["x_shift"]*d, latch=v["y_latch"], x=v["x"],
-            slow=v["slow_feed"], old=old_accel
-        ))
+                safe=v["y_safe"],
+                feed=v["feed"],
+                latchapproach=v["y_latch"] * d,
+                # abs(): the final slow X move into the dock keeps its direction
+                # (left-to-right for tools_direction 1) whatever the x_shift sign.
+                xshift=v["x"] + abs(v["x_shift"]) * d,
+                old=old_accel,
+            )
+        )
         self._wait_moves()
         if self._single_sensor():
             if not self._wait_for_attached(False):
@@ -479,14 +488,20 @@ SET_VELOCITY_LIMIT ACCEL={old}""".format(
         old_accel = self._old_accel()
         self._apply_offset(0, move=0)
         self._run("SET_GCODE_OFFSET X=0 Y=0 MOVE=0")
-        self._run("""SET_VELOCITY_LIMIT ACCEL={accel}
+        self._run(
+            """SET_VELOCITY_LIMIT ACCEL={accel}
 G90
 G1 Y{safe} X{x} F{feed}""".format(
-            accel=v["accel"], safe=v["y_safe"], x=v["x"], feed=v["feed"]
-        ))
+                accel=v["accel"], safe=v["y_safe"], x=v["x"], feed=v["feed"]
+            )
+        )
         if not self.feeder_open:
             self._open()
-        self._run("""G1 Y{latch3} F{feed}
+        # abs(): picking always runs opposite to dropping (right-to-left for
+        # tools_direction 1) whatever the x_shift sign.
+        shift = abs(v["x_shift"])
+        self._run(
+            """G1 Y{latch3} F{feed}
 G1 Y{latch} F{slow}
 G1 Y{latch03} F{slow}
 G1 Y{latch} F{slow}
@@ -495,12 +510,17 @@ G1 X{xshift} F{slow}
 G1 Y{latch5} F{slow}
 G1 X{xshift_more} F{slow}
 M106 S255""".format(
-            feed=v["feed"],
-            latch3=v["y_latch"] + 20*d, latch=v["y_latch"], latch03=v["y_latch"] - .1*d,
-            slow=v["slow_feed"], xshift2=v["x"] - (v["x_shift"] - 4)*d,
-            xshift=v["x"] - v["x_shift"]*d, latch5=v["y_latch"] + 5*d,
-            xshift_more=v["x"] - (v["x_shift"] + 2)*d
-        ))
+                feed=v["feed"],
+                latch3=v["y_latch"] + 20 * d,
+                latch=v["y_latch"],
+                latch03=v["y_latch"] - 0.1 * d,
+                slow=v["slow_feed"],
+                xshift2=v["x"] - (shift - 4),
+                xshift=v["x"] - shift,
+                latch5=v["y_latch"] + 5 * d,
+                xshift_more=v["x"] - (shift + 2),
+            )
+        )
         self._wait_moves()
         if self._single_sensor():
             if not self._wait_for_attached(True):
@@ -525,9 +545,15 @@ M106 S255""".format(
         first_prime_executed = False
         preparing = self._is_printing() or self._resume_preparing
         if preparing and self._heater_temperature(tool) > 190.0:
-            self._run("G90\nG1 X%s F%s\nG1 Y%s F%s" % (
-                v["x"] - v["x_prime_shift"] * v["direction"], v["feed"],
-                v["y_prime"], v["feed"]))
+            self._run(
+                "G90\nG1 X%s F%s\nG1 Y%s F%s"
+                % (
+                    v["x"] - v["x_prime_shift"] * v["direction"],
+                    v["feed"],
+                    v["y_prime"],
+                    v["feed"],
+                )
+            )
             first_prime_enabled = int(state.get("first_prime_enabled", 1)) != 0
             if first_prime_enabled and int(state.get("first_prime_flag", 1)) == 0:
                 amount = float(state.get("first_prime_amount", 0.0))
@@ -541,20 +567,29 @@ M106 S255""".format(
                 first_prime_executed = True
             amount = float(state.get("prime_amount", 0.0))
             speed = float(state.get("prime_speed", 1.0))
-            retract = float(state.get(
-                "first_prime_prime_retract", 0.2
-            )) if first_prime_executed else float(state.get("prime_retract", 0.0))
+            retract = (
+                float(state.get("first_prime_prime_retract", 0.2))
+                if first_prime_executed
+                else float(state.get("prime_retract", 0.0))
+            )
             retract_speed = float(state.get("prime_retract_speed", 1.0))
-            self._run("""G91
+            self._run(
+                """G91
 G1 E{e1} F{f1}
 G1 E{e2} F{f2}
 G1 E{e3} F{f3}
 G1 E-{retract} F{rf}
 G90""".format(
-                e1=amount * .2, e2=amount * .3, e3=amount * .5,
-                f1=speed * .5 * 60., f2=speed * .75 * 60., f3=speed * 60.,
-                retract=retract, rf=retract_speed * 60.
-            ))
+                    e1=amount * 0.2,
+                    e2=amount * 0.3,
+                    e3=amount * 0.5,
+                    f1=speed * 0.5 * 60.0,
+                    f2=speed * 0.75 * 60.0,
+                    f3=speed * 60.0,
+                    retract=retract,
+                    rf=retract_speed * 60.0,
+                )
+            )
         if preparing and int(state.get("clean_move", 1)) != 0:
             cmx = float(state.get("x_clean_move", 0.0))
             cmy = float(state.get("y_clean_move", 0.0))
@@ -562,13 +597,16 @@ G90""".format(
             # On a tool's first use the slicer has no matching tool-change
             # unretract queued. Use dedicated short retracts after both prime
             # and cleaning; later changes retain the normal retract values.
-            retract = float(state.get(
-                "first_prime_clean_retract", 0.1
-            )) if first_prime_executed else float(state.get("clean_retract", 0.0))
+            retract = (
+                float(state.get("first_prime_clean_retract", 0.1))
+                if first_prime_executed
+                else float(state.get("clean_retract", 0.0))
+            )
             rf = float(state.get("clean_retract_speed", 1.0)) * 60.0
             d = v["direction"]
             ptfe = float(state.get("ptfe_clean_slow_speed", 12.5)) * 60.0
-            self._run("""G90
+            self._run(
+                """G90
 G1 Y{brush} F{feed}
 G1 X{xprime} F{feed}
 G91
@@ -586,12 +624,25 @@ G1 X{cmx1} Y{cmy1} F{cmf}
 G1 E-{retract} F{rf}
 G90
 G1 Y{safe} F{feed}""".format(
-                xprime=v["x"]-v["x_prime_shift"]*d, brush=v["y_brush"], feed=v["feed"],
-                xptfe=10*d, ptfe=ptfe, yptfe=6*d, xptfe_back=-10*d, xbrush=10*d,
-                ybrush=-8*d,
-                cmx1=-cmx*d, cmy1=cmy*d, cmy2=-cmy*d, cmx2=cmx*d,
-                cmf=cmf, retract=retract, rf=rf, safe=v["y_safe"]
-            ))
+                    xprime=v["x"] - v["x_prime_shift"] * d,
+                    brush=v["y_brush"],
+                    feed=v["feed"],
+                    xptfe=10 * d,
+                    ptfe=ptfe,
+                    yptfe=6 * d,
+                    xptfe_back=-10 * d,
+                    xbrush=10 * d,
+                    ybrush=-8 * d,
+                    cmx1=-cmx * d,
+                    cmy1=cmy * d,
+                    cmy2=-cmy * d,
+                    cmx2=cmx * d,
+                    cmf=cmf,
+                    retract=retract,
+                    rf=rf,
+                    safe=v["y_safe"],
+                )
+            )
             self._apply_offset(tool)
         else:
             self._run("G1 Y%s F%s" % (v["y_safe"], v["feed"]))
@@ -623,21 +674,25 @@ G1 Y{safe} F{feed}""".format(
             self._apply_offset(tool, move=0)
             direction = int(self._tool_cfg().get("tools_direction", 1))
             if not self._resume_preparing:
-                self._run("G91\nG1 %s F14000\nG90" % (("Y%s Z3" % (-2*direction)) if self._is_printing() else "Z1"))
+                self._run(
+                    "G91\nG1 %s F14000\nG90"
+                    % (("Y%s Z3" % (-2 * direction)) if self._is_printing() else "Z1")
+                )
             current = self._current_tool()
             if current == -2:
-                self._fail("MHC_SET: hotend attached but tool unknown; "
-                           "run MHC_ASSIGN_TOOL T=<n> (or remove it)"
-                           if self._single_sensor() else
-                           "MHC_SET: ambiguous sensor state")
+                self._fail(
+                    "MHC_SET: hotend attached but tool unknown; "
+                    "run MHC_ASSIGN_TOOL T=<n> (or remove it)"
+                    if self._single_sensor()
+                    else "MHC_SET: ambiguous sensor state"
+                )
             if current == tool:
                 if self._resume_preparing:
                     v = self._motion_values(tool)
                     old_accel = self._old_accel()
                     self._apply_offset(0, move=0)
                     self._run("SET_GCODE_OFFSET X=0 Y=0 MOVE=0")
-                    self._run("G90\nG1 Y%s F%s\nM106 S255" % (
-                        v["y_safe"], v["feed"]))
+                    self._run("G90\nG1 Y%s F%s\nM106 S255" % (v["y_safe"], v["feed"]))
                     self._after_pick(tool, v)
                     self._run("SET_VELOCITY_LIMIT ACCEL=%s\nM106 S0" % old_accel)
                     return
@@ -660,14 +715,17 @@ G1 Y{safe} F{feed}""".format(
         """Keep the known Z position clear of the saved print layer."""
         position = list(move.get_status(self.reactor.monotonic())["position"])
         safe_z = max(position[2], layer_z + 5.0)
-        axis_maximum = self.printer.lookup_object("toolhead").get_status(
-            self.reactor.monotonic()).get("axis_maximum")
+        axis_maximum = (
+            self.printer.lookup_object("toolhead")
+            .get_status(self.reactor.monotonic())
+            .get("axis_maximum")
+        )
         if axis_maximum is not None and safe_z > axis_maximum[2]:
-            raise gcmd.error("MHC_RESUME: cannot keep 5 mm Z clearance "
-                             "within the printer's Z limit")
+            raise gcmd.error(
+                "MHC_RESUME: cannot keep 5 mm Z clearance within the printer's Z limit"
+            )
         if safe_z > position[2]:
-            self._run("G90\nG1 Z%.6f F3000" %
-                      (safe_z - move.base_position[2]))
+            self._run("G90\nG1 Z%.6f F3000" % (safe_z - move.base_position[2]))
             position[2] = safe_z
         return position
 
@@ -694,8 +752,7 @@ G1 Y{safe} F{feed}""".format(
                 self._resume_preparing = True
                 # A menu Z jog may have lowered the head during the pause.
                 # Restore clearance before any XY homing or dock motion.
-                self._raise_above_layer(gcmd, move,
-                                        original["last_position"][2])
+                self._raise_above_layer(gcmd, move, original["last_position"][2])
                 self._run("G90\nG28 Y\nG28 X\nCLOSE")
                 self._set_tool(tool)
                 # A failed SET must never reach BASE_RESUME.
@@ -713,7 +770,8 @@ G1 Y{safe} F{feed}""".format(
                 restored["last_position"][axis] += delta
                 restored["homing_position"][axis] = origin[axis]
             physical_position = self._raise_above_layer(
-                gcmd, move, restored["last_position"][2])
+                gcmd, move, restored["last_position"][2]
+            )
             if error_recovery:
                 # BASE_RESUME restores modes, offsets and E without moving
                 # XYZ. Keep the nozzle lifted for the slicer's next travel
@@ -722,9 +780,13 @@ G1 Y{safe} F{feed}""".format(
             else:
                 # A manual pause interrupted printing at this exact point,
                 # so return above it before BASE_RESUME lowers to the layer.
-                self._run("G90\nG1 X%.6f Y%.6f F12000" % (
-                    restored["last_position"][0] - move.base_position[0],
-                    restored["last_position"][1] - move.base_position[1]))
+                self._run(
+                    "G90\nG1 X%.6f Y%.6f F12000"
+                    % (
+                        restored["last_position"][0] - move.base_position[0],
+                        restored["last_position"][1] - move.base_position[1],
+                    )
+                )
             move.saved_states["PAUSE_STATE"] = restored
             self._run("BASE_RESUME VELOCITY=30")
         except _OperationPaused as exc:
@@ -773,7 +835,8 @@ G1 Y{safe} F{feed}""".format(
         cmf = float(state.get("clean_move_speed", 250.0)) * 60.0
         ptfe = float(state.get("ptfe_clean_slow_speed", 12.5)) * 60.0
         d = v["direction"]
-        self._run("""SET_VELOCITY_LIMIT ACCEL={accel}
+        self._run(
+            """SET_VELOCITY_LIMIT ACCEL={accel}
 G90
 G1 Y{safe} F{feed}
 G1 X{xprime} F{feed}
@@ -793,13 +856,25 @@ G1 X{cmx1} Y{cmy1} F{cmf}
 G90
 G1 Y{safe} F{feed}
 SET_VELOCITY_LIMIT ACCEL={old}""".format(
-            accel=v["accel"], safe=v["y_safe"], feed=v["feed"],
-            xprime=v["x"] - v["x_prime_shift"]*d, brush=v["y_brush"],
-            xptfe=10*d, ptfe=ptfe, yptfe=6*d, xptfe_back=-10*d,
-            xbrush=10*d, ybrush=-8*d,
-            cmx1=-cmx*d, cmy1=cmy*d,
-            cmy2=-cmy*d, cmx2=cmx*d, cmf=cmf, old=old_accel
-        ))
+                accel=v["accel"],
+                safe=v["y_safe"],
+                feed=v["feed"],
+                xprime=v["x"] - v["x_prime_shift"] * d,
+                brush=v["y_brush"],
+                xptfe=10 * d,
+                ptfe=ptfe,
+                yptfe=6 * d,
+                xptfe_back=-10 * d,
+                xbrush=10 * d,
+                ybrush=-8 * d,
+                cmx1=-cmx * d,
+                cmy1=cmy * d,
+                cmy2=-cmy * d,
+                cmx2=cmx * d,
+                cmf=cmf,
+                old=old_accel,
+            )
+        )
 
     def cmd_MHC_ERROR(self, gcmd):
         """Record a failed change and pause an active print once."""
@@ -811,7 +886,9 @@ SET_VELOCITY_LIMIT ACCEL={old}""".format(
             if state == "printing":
                 self._run("PAUSE")
         else:
-            self.gcode.respond_info("MHC_ERROR: no active print; printer was not paused")
+            self.gcode.respond_info(
+                "MHC_ERROR: no active print; printer was not paused"
+            )
 
     def cmd_MHC_TOOL_OFFSET(self, gcmd):
         tool = gcmd.get_int("T", None)
