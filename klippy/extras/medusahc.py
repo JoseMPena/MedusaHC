@@ -503,22 +503,15 @@ G1 Y{safe} X{x} F{feed}""".format(
         self._run(
             """G1 Y{latch3} F{feed}
 G1 Y{latch} F{slow}
-G1 Y{latch03} F{slow}
-G1 Y{latch} F{slow}
-G1 X{xshift2} F{feed}
 G1 X{xshift} F{slow}
-G1 Y{latch5} F{slow}
-G1 X{xshift_more} F{slow}
+G1 Y{safe} F{feed}
 M106 S255""".format(
+                safe=v["y_safe"],
                 feed=v["feed"],
                 latch3=v["y_latch"] + 20 * d,
                 latch=v["y_latch"],
-                latch03=v["y_latch"] - 0.1 * d,
                 slow=v["slow_feed"],
-                xshift2=v["x"] - (shift - 4),
                 xshift=v["x"] - shift,
-                latch5=v["y_latch"] + 5 * d,
-                xshift_more=v["x"] - (shift + 2),
             )
         )
         self._wait_moves()
